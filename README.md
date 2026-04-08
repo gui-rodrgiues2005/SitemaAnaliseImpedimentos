@@ -1,6 +1,6 @@
 #Sistema de Análise de Impedimento (VAR)
 
-Projeto de Visão Computacional desenvolvido para a disciplina de [Nome da Matéria].
+Projeto de Visão Computacional desenvolvido para a disciplina de Processamento de Imagens.
 
 ##Tecnologias
 - **Backend:** Python, Flask, OpenCV, NumPy

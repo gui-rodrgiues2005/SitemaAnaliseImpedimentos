@@ -4,16 +4,75 @@ import os
 import cv2
 import numpy as np
 import uuid
-import time
+from ultralytics import YOLO
 
 app = Flask(__name__)
 CORS(app)
 
-#Configuração de pastas
 PASTA_ENTRADA = "uploads"
 PASTA_SAIDA = "processed"
 os.makedirs(PASTA_ENTRADA, exist_ok=True)
 os.makedirs(PASTA_SAIDA, exist_ok=True)
+
+model = YOLO('yolov8n.pt')
+
+# ================= FILTRO DE CAMPO =================
+def filtrar_campo(imagem):
+    hsv = cv2.cvtColor(imagem, cv2.COLOR_BGR2HSV)
+
+    lower_green = np.array([35, 40, 40])
+    upper_green = np.array([85, 255, 255])
+    mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+    mask_not_green = cv2.bitwise_not(mask_green)
+
+    lower_white = np.array([0, 0, 180])
+    upper_white = np.array([180, 60, 255])
+    mask_white = cv2.inRange(hsv, lower_white, upper_white)
+
+    mask_final = cv2.bitwise_and(mask_white, mask_not_green)
+
+    kernel = np.ones((3,3), np.uint8)
+    mask_final = cv2.morphologyEx(mask_final, cv2.MORPH_CLOSE, kernel, 2)
+
+    return mask_final
+
+# ================= DETECÇÃO DA LINHA =================
+def detectar_linha_estavel(imagem, linha_x):
+    mask = filtrar_campo(imagem)
+    edges = cv2.Canny(mask, 50, 150)
+
+    linhas = cv2.HoughLinesP(edges, 1, np.pi/180,
+                             threshold=80,
+                             minLineLength=120,
+                             maxLineGap=30)
+
+    if linhas is None:
+        return None
+
+    melhores = []
+
+    for linha in linhas:
+        x1, y1, x2, y2 = linha[0]
+
+        angulo = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+        comprimento = np.hypot(x2 - x1, y2 - y1)
+
+        if abs(angulo) < 60:
+            continue
+
+        dist = abs(((x1 + x2) / 2) - linha_x)
+        score = comprimento - dist * 0.5
+
+        melhores.append((score, x1, y1, x2, y2))
+
+    if not melhores:
+        return None
+
+    melhores.sort(reverse=True)
+    _, x1, y1, x2, y2 = melhores[0]
+
+    return (x1, y1, x2, y2)
 
 @app.route('/processed/<filename>')
 def buscar_foto_processada(filename):
@@ -21,70 +80,161 @@ def buscar_foto_processada(filename):
 
 @app.route("/process-image", methods=["POST"])
 def processar_impedimento():
+
     if "image" not in request.files:
         return jsonify({"error": "Arquivo não encontrado"}), 400
         
     arquivo = request.files["image"]
-    
-    # Gerando um nome único para não misturar os testes da turma
-    identificador = str(uuid.uuid4())[:8]
-    nome_base = f"projeto_{identificador}"
-    caminho_original = os.path.join(PASTA_ENTRADA, f"{nome_base}_original.png")
-    arquivo.save(caminho_original)
 
-    # Carrega a imagem para o OpenCV
-    imagem = cv2.imread(caminho_original)
+    nome_base = f"img_{str(uuid.uuid4())[:8]}"
+    caminho = os.path.join(PASTA_ENTRADA, nome_base + ".png")
+    arquivo.save(caminho)
+
+    imagem = cv2.imread(caminho)
     if imagem is None:
-        return jsonify({"error": "Não foi possível ler a imagem"}), 400
+        return jsonify({"error": "Erro ao ler imagem"}), 400
 
-    # Dicionário que o React vai ler para mostrar o "passo a passo"
-    links_resultado = {
-        "original": f"http://localhost:5000/processed/{nome_base}_original.png"
-    }
+    results = model(imagem)
+
+    jogadores_branco = []
+    jogadores_preto = []
+
+    # ================= DETECÇÃO =================
+    for result in results:
+        for box in result.boxes:
+            if int(box.cls) == 0:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+
+                jogador = {
+                    "x1": int(x1),
+                    "x2": int(x2),
+                    "y": int((y1 + y2) / 2)
+                }
+
+                crop = imagem[int(y1):int(y2), int(x1):int(x2)]
+
+                if crop.size > 0:
+                    if np.mean(crop) > 150:
+                        jogadores_branco.append(jogador)
+                    else:
+                        jogadores_preto.append(jogador)
+
+    # ================= DIREÇÃO DO ATAQUE =================
+    if jogadores_preto:
+        media = np.mean([(p["x1"] + p["x2"]) / 2 for p in jogadores_preto])
+        ataque_direita = media < imagem.shape[1] / 2
+    else:
+        ataque_direita = True
+
+    # ================= REMOVER GOLEIRO =================
+    if len(jogadores_preto) > 1:
+        ordenados = sorted(jogadores_preto, key=lambda p: (p["x1"] + p["x2"]) / 2)
+
+        if ataque_direita:
+            jogadores_preto_validos = ordenados[:-1]
+        else:
+            jogadores_preto_validos = ordenados[1:]
+    else:
+        jogadores_preto_validos = jogadores_preto
+
+    # ================= LINHA DO ÚLTIMO DEFENSOR (CORRIGIDO) =================
+    linha_x = None
+    impedidos = []
+
+    if jogadores_preto_validos:
+
+        if ataque_direita:
+            ultimo = max(jogadores_preto_validos, key=lambda p: p["x2"])
+            linha_x = ultimo["x2"]
+        else:
+            ultimo = min(jogadores_preto_validos, key=lambda p: p["x1"])
+            linha_x = ultimo["x1"]
+
+        for j in jogadores_branco:
+            if ataque_direita:
+                if j["x2"] > linha_x + 5:
+                    impedidos.append(j)
+            else:
+                if j["x1"] < linha_x - 5:
+                    impedidos.append(j)
+
+    # ================= PIPELINE =================
+    links = {}
+
     cv2.imwrite(os.path.join(PASTA_SAIDA, f"{nome_base}_original.png"), imagem)
+    links["original"] = f"http://localhost:5000/processed/{nome_base}_original.png"
 
-    #1 - FILTRO GAUSSIANO: Suaviza a imagem(tira o ruído da grama)
-    imagem_suave = cv2.GaussianBlur(imagem, (5, 5), 0)
-    nome_gauss = f"{nome_base}_1_suave.png"
-    cv2.imwrite(os.path.join(PASTA_SAIDA, nome_gauss), imagem_suave)
-    links_resultado["gaussian"] = f"http://localhost:5000/processed/{nome_gauss}"
+    blur = cv2.GaussianBlur(imagem, (5,5), 0)
+    nome = f"{nome_base}_1_gaussian.png"
+    cv2.imwrite(os.path.join(PASTA_SAIDA, nome), blur)
+    links["gaussian"] = f"http://localhost:5000/processed/{nome}"
 
-    #2 - FILTRO SOBEL: Detecta onde estão as bordas (as linhas brancas)
-    imagem_cinza = cv2.cvtColor(imagem_suave, cv2.COLOR_BGR2GRAY)
-    bordas_x = cv2.Sobel(imagem_cinza, cv2.CV_64F, 1, 0, ksize=3)
-    bordas_reais = np.uint8(np.absolute(bordas_x))
-    nome_sobel = f"{nome_base}_2_bordas.png"
-    cv2.imwrite(os.path.join(PASTA_SAIDA, nome_sobel), bordas_reais)
-    links_resultado["sobel"] = f"http://localhost:5000/processed/{nome_sobel}"
+    gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
+    sobel = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    sobel = np.uint8(np.absolute(sobel))
+    nome = f"{nome_base}_2_sobel.png"
+    cv2.imwrite(os.path.join(PASTA_SAIDA, nome), sobel)
+    links["sobel"] = f"http://localhost:5000/processed/{nome}"
 
-    #3 - MORFOLOGIA: Binariza (preto e branco puro) e engrossa as linhas
-    _, imagem_binaria = cv2.threshold(bordas_reais, 50, 255, cv2.THRESH_BINARY)
-    elemento_estruturante = np.ones((3,3), np.uint8)
-    imagem_dilatada = cv2.dilate(imagem_binaria, elemento_estruturante, iterations=1)
-    nome_morfologia = f"{nome_base}_3_morfologia.png"
-    cv2.imwrite(os.path.join(PASTA_SAIDA, nome_morfologia), imagem_dilatada)
-    links_resultado["morphology"] = f"http://localhost:5000/processed/{nome_morfologia}"
+    _, binaria = cv2.threshold(sobel, 50, 255, cv2.THRESH_BINARY)
+    kernel = np.ones((3,3), np.uint8)
+    dilatada = cv2.dilate(binaria, kernel, iterations=1)
+    nome = f"{nome_base}_3_morph.png"
+    cv2.imwrite(os.path.join(PASTA_SAIDA, nome), dilatada)
+    links["morphology"] = f"http://localhost:5000/processed/{nome}"
 
-    #4 - FUNÇÃO EXTRA (HoughLinesP): Identifica as retas matemáticas do campo
-    linhas_detectadas = cv2.HoughLinesP(imagem_dilatada, 1, np.pi/180, threshold=80, minLineLength=80, maxLineGap=15)
-    
-    mascara_linhas = np.zeros_like(imagem)
-    if linhas_detectadas is not None:
-        for linha in linhas_detectadas:
-            x1, y1, x2, y2 = linha[0]
-            # Desenha as linhas em Ciano (azul claro) para destacar bem
-            cv2.line(mascara_linhas, (x1, y1), (x2, y2), (255, 255, 0), 2)
+    # ================= RESULTADO FINAL =================
+    resultado = imagem.copy()
 
-    #5 - OPERAÇÃO ENTRE IMAGENS: Sobrepõe as linhas na foto original
-    resultado_final = cv2.addWeighted(imagem, 0.9, mascara_linhas, 1.0, 0)
-    nome_final = f"{nome_base}_4_resultado.png"
-    cv2.imwrite(os.path.join(PASTA_SAIDA, nome_final), resultado_final)
-    links_resultado["final"] = f"http://localhost:5000/processed/{nome_final}"
+    if linha_x is not None:
+        linha_ref = detectar_linha_estavel(imagem, linha_x)
 
-    # Retorna o pacote de URLs para o Frontend
-    return jsonify(links_resultado)
+        if linha_ref is not None:
+            x1, y1, x2, y2 = linha_ref
+
+            dx = x2 - x1
+            dy = y2 - y1
+            tam = np.hypot(dx, dy)
+
+            if tam != 0:
+                dx /= tam
+                dy /= tam
+            else:
+                dx, dy = 1, 0
+
+            x0 = linha_x
+            y0 = imagem.shape[0] // 2
+
+            L = 2000
+
+            p1 = (int(x0 - dx * L), int(y0 - dy * L))
+            p2 = (int(x0 + dx * L), int(y0 + dy * L))
+
+            cv2.line(resultado, p1, p2, (0,0,255), 3)
+        else:
+            cv2.line(resultado, (linha_x, 0), (linha_x, imagem.shape[0]), (0,0,255), 3)
+
+    # desenhar jogadores
+    for p in jogadores_preto:
+        cv2.circle(resultado, (int((p["x1"]+p["x2"])/2), p["y"]), 6, (0,0,0), -1)
+
+    for p in jogadores_branco:
+        cv2.circle(resultado, (int((p["x1"]+p["x2"])/2), p["y"]), 6, (255,255,255), -1)
+
+    for p in impedidos:
+        cv2.circle(resultado, (int((p["x1"]+p["x2"])/2), p["y"]), 10, (0,255,255), 2)
+
+    texto = "ATAQUE ->" if ataque_direita else "<- ATAQUE"
+    cv2.putText(resultado, texto, (20,40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+
+    nome_final = f"{nome_base}_4_final.png"
+    cv2.imwrite(os.path.join(PASTA_SAIDA, nome_final), resultado)
+
+    links["final"] = f"http://localhost:5000/processed/{nome_final}"
+    links["offside"] = "sim" if impedidos else "nao"
+
+    return jsonify(links)
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
-    
-# testando backend

@@ -154,7 +154,7 @@ function App() {
     { key: "original", title: "Imagem Original", description: "Upload do usuário" },
     { key: "gaussian", title: "1. Filtro Gaussiano", description: "Suavização e Redução de Ruído" },
     { key: "sobel", title: "2. Filtro Sobel", description: "Detecção de Bordas Spaciais" },
-    { key: "morphology", title: "3. Operação Morfológica", description: "Binarização e Dilação (Threshold)" },
+    { key: "morphology", title: "3. Operação Morfológica", description: "Binarização e Dilatação (Threshold)" },
     { key: "final", title: "4. Resultado Final (VAR)", description: "AddWeighted + Transformada de Hough" },
   ];
 
@@ -206,6 +206,16 @@ function App() {
           ))}
         </section>
       )}
+      {pipelineData && (
+  <div style={{ textAlign: "center", marginTop: "30px" }}>
+    <h2>
+      Resultado:{" "}
+      <span style={{ color: pipelineData.offside === "sim" ? "red" : "green" }}>
+        {pipelineData.offside === "sim" ? "IMPEDIMENTO" : "LEGAL"}
+      </span>
+    </h2>
+  </div>
+)}
     </div>
   );
 }

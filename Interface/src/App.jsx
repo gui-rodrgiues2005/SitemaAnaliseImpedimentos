@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import "./estilo.css";
 
 function App() {
@@ -7,73 +7,26 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [zoomImage, setZoomImage] = useState(null);
-  const [uploadError, setUploadError] = useState(null);
-  const [uploadSuccess, setUploadSuccess] = useState(null);
-  const [isDragActive, setIsDragActive] = useState(false);
 
-  // PIPELINE REAL (AJUSTADO COM O BACKEND)
+
+  const [direcaoAtaque, setDirecaoAtaque] = useState("direita");
+  const [lineAtacante, setLineAtacante] = useState(200);
+  const [lineDefensor, setLineDefensor] = useState(300);
+  const varImageRef = useRef(null);
+
   const steps = [
-    {
-      key: "gaussian",
-      title: "Filtro Gaussiano",
-      description: "Usado para suavizar a imagem e reduzir ruídos do campo"
-    },
-    {
-      key: "sobel",
-      title: "Sobel (Bordas)",
-      description: "Usado para detectar os contornos dos jogadores"
-    },
-    {
-      key: "realce",
-      title: "Operação entre imagens (AbsDiff)",
-      description: "Ajuda a recuperar e evidenciar detalhes importantes que foram reduzidos pelo filtro Gaussiano"
-    },
-    {
-      key: "edges",
-      title: "Canny",
-      description: "Usado para manter apenas bordas mais fortes e claras"
-    },
-    {
-      key: "morph",
-      title: "Dilatação",
-      description: "Usada para reforçar e conectar regiões dos jogadores"
-    },
-    {
-      key: "final",
-      title: "Resultado Final",
-      description: "Jogadores segmentados e destacados no campo"
-    }
+    { key: "gaussian", title: "Filtro Gaussiano", description: "Suavização e redução de ruído" },
+    { key: "sobel", title: "Sobel (Bordas)", description: "Detecção de contornos" },
+    { key: "realce", title: "Operação AbsDiff", description: "Recuperação de detalhes" },
+    { key: "edges", title: "Canny", description: "Bordas mais fortes" },
+    { key: "morph", title: "Dilatação", description: "Conexão de regiões" },
+    { key: "final", title: "Resultado Final", description: "Segmentação completa" }
   ];
 
-  const validateFile = (file) => {
-    const acceptedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
-    const maxSize = 10 * 1024 * 1024;
-
-    if (!file) return 'Nenhum arquivo selecionado';
-
-    if (!acceptedTypes.includes(file.type)) {
-      return `Formato não suportado. Use: ${acceptedTypes.map(t => t.split('/')[1]).join(', ')}`;
-    }
-
-    if (file.size > maxSize) {
-      return `Arquivo muito grande. Máximo: ${maxSize / (1024 * 1024)}MB`;
-    }
-
-    return null;
-  };
-
   const handleUpload = async () => {
-    if (!file) {
-      setUploadError("Selecione um arquivo primeiro");
-      return;
-    }
-
+    if (!file) return;
     setIsLoading(true);
-    setUploadError(null);
-    setUploadSuccess(null);
     setPipelineData(null);
-    setCurrentStep(0);
-
     const formData = new FormData();
     formData.append("image", file);
 
@@ -82,143 +35,111 @@ function App() {
         method: "POST",
         body: formData,
       });
-
-      if (!res.ok) throw new Error(`Erro HTTP: ${res.status}`);
-
       const data = await res.json();
       setPipelineData(data);
-      setUploadSuccess("Imagem processada com sucesso!");
     } catch (err) {
-      setUploadError(err.message || "Erro ao processar imagem");
+      alert("Erro ao conectar com o servidor.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  const getVeredito = () => {
+    const isOffside = direcaoAtaque === "direita" 
+      ? lineAtacante > lineDefensor 
+      : lineAtacante < lineDefensor;
+    return isOffside ? "IMPEDIDO" : "POSIÇÃO LEGAL";
+  };
+
+  const startDrag = (setter) => {
+    const onMove = (e) => {
+      if (!varImageRef.current) return;
+      const rect = varImageRef.current.getBoundingClientRect();
+      const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+      setter(x);
+    };
+    const onStop = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onStop);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onStop);
+  };
+
   return (
     <div className="container">
-
-      {/* HEADER */}
       <div className="header">
-        <h1 className="title">⚽ VAR Analyzer</h1>
-        <p className="subtitle">
-          Pipeline de visão computacional para análise de impedimento
-        </p>
+        <h1 className="title">⚽ VAR SIMPLES</h1>
+        <p className="subtitle">Pipeline de visão computacional interativo</p>
       </div>
 
-      {/* UPLOAD */}
       <div className="upload-container">
-
         <div className="upload-input-wrapper">
-          <input
-            id="file-upload"
-            type="file"
-            className="upload-input"
-            onChange={(e) => setFile(e.target.files[0])}
-          />
-
-          <label htmlFor="file-upload" className="upload-label">
-            Selecionar arquivo
-          </label>
+          <input id="file-upload" type="file" className="upload-input" onChange={(e) => setFile(e.target.files[0])} />
+          <label htmlFor="file-upload" className="upload-label">{file ? file.name : "Selecionar arquivo"}</label>
         </div>
-
-        {file && (
-          <div className="file-info">
-            📄 {file.name}
-            <button
-              className="remove-file"
-              onClick={() => setFile(null)}
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        <div className="upload-button-wrapper">
-          <button
-            className="upload-button"
-            onClick={handleUpload}
-            disabled={!file || isLoading}
-          >
-            {isLoading ? "Processando..." : "Analisar"}
-          </button>
-        </div>
-
-        {uploadError && (
-          <div className="error-message">{uploadError}</div>
-        )}
-
-        {uploadSuccess && (
-          <div className="success-message">{uploadSuccess}</div>
-        )}
-
+        <button className="upload-button" onClick={handleUpload} disabled={!file || isLoading}>
+          {isLoading ? "Processando..." : "Analisar"}
+        </button>
       </div>
 
-      {/* RESULTADO */}
       {pipelineData && (
-        <div className="grid">
+        <>
+          <div className="grid">
+            <div className="card">
+              <div className="card-header">Original</div>
+              <div className="card-body">
+                <img src={pipelineData.original} className="image" onClick={() => setZoomImage(pipelineData.original)} alt="orig" />
+              </div>
+            </div>
 
-          {/* ORIGINAL */}
-          <div className="card">
-            <div className="card-header">Original</div>
-            <div className="card-body">
-              <img
-                src={pipelineData.original}
-                className="image"
-                onClick={() => setZoomImage(pipelineData.original)}
-              />
+            <div className="card">
+              <div className="card-header">
+                <div>{steps[currentStep].title}</div>
+                <small>{steps[currentStep].description}</small>
+              </div>
+              <div className="card-body">
+                <img src={pipelineData[steps[currentStep].key]} className="image" onClick={() => setZoomImage(pipelineData[steps[currentStep].key])} alt="step" />
+              </div>
+              <div className="controls">
+                <button className="btn" onClick={() => setCurrentStep(s => Math.max(0, s - 1))}>←</button>
+                <span>{currentStep + 1}/{steps.length}</span>
+                <button className="btn" onClick={() => setCurrentStep(s => Math.min(steps.length - 1, s + 1))}>→</button>
+              </div>
             </div>
           </div>
 
-          {/* PIPELINE */}
-          <div className="card">
+          
+          <div className="var-section">
+            <h2 className="section-title">🖥️ Mesa de Decisão VAR</h2>
+            
+            <div className="dir-controls">
+              <span>Ataque para:</span>
+              <button className={`btn-dir ${direcaoAtaque === "esquerda" ? "active" : ""}`} onClick={() => setDirecaoAtaque("esquerda")}>⬅ ESQUERDA</button>
+              <button className={`btn-dir ${direcaoAtaque === "direita" ? "active" : ""}`} onClick={() => setDirecaoAtaque("direita")}>DIREITA ➡</button>
+            </div>
 
-            <div className="card-header">
-              <div>
-                <div>{steps[currentStep].title}</div>
-                <small style={{ opacity: 0.8 }}>
-                  {steps[currentStep].description}
-                </small>
+            <div className={`veredito-display ${getVeredito().replace(" ", "-")}`}>
+              {getVeredito()}
+            </div>
+
+            <div className="var-workspace" style={{ position: 'relative', display: 'inline-block' }}>
+              <img ref={varImageRef} src={pipelineData.final} className="image-main-var" alt="final-var" />
+              
+              <div className="drag-line atacante" style={{ left: lineAtacante }} onMouseDown={() => startDrag(setLineAtacante)}>
+                <div className="line-tag">ATACANTE</div>
               </div>
 
-              <span>{currentStep + 1}/{steps.length}</span>
+              <div className="drag-line defensor" style={{ left: lineDefensor }} onMouseDown={() => startDrag(setLineDefensor)}>
+                <div className="line-tag">DEFENSOR</div>
+              </div>
             </div>
-
-            <div className="card-body">
-              <img
-                src={pipelineData[steps[currentStep].key]}
-                className="image"
-                onClick={() => setZoomImage(pipelineData[steps[currentStep].key])}
-              />
-            </div>
-
-            <div className="controls">
-              <button
-                className="btn btn-prev"
-                onClick={() => setCurrentStep(s => Math.max(0, s - 1))}
-              >
-                ←
-              </button>
-
-              <button
-                className="btn btn-next"
-                onClick={() => setCurrentStep(s => Math.min(steps.length - 1, s + 1))}
-              >
-                →
-              </button>
-            </div>
-
+            <p className="hint">Arraste as linhas coloridas para ajustar</p>
           </div>
-        </div>
+        </>
       )}
 
-      {/* ZOOM */}
-      {zoomImage && (
-        <div className="zoom-overlay" onClick={() => setZoomImage(null)}>
-          <img src={zoomImage} className="zoom-image" />
-        </div>
-      )}
-
+      {zoomImage && <div className="zoom-overlay" onClick={() => setZoomImage(null)}><img src={zoomImage} className="zoom-image" alt="zoom" /></div>}
     </div>
   );
 }

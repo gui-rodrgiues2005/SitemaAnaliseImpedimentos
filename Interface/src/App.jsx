@@ -1,130 +1,78 @@
 import React, { useState } from "react";
-
-const styles = {
-  container: {
-    fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-    backgroundColor: "#f4f7f6",
-    minHeight: "100vh",
-    padding: "40px",
-    color: "#333",
-  },
-  header: {
-    textAlign: "center",
-    marginBottom: "40px",
-    borderBottom: "2px solid #2ecc71",
-    paddingBottom: "20px",
-  },
-  title: {
-    margin: 0,
-    fontSize: "2.5rem",
-    color: "#2c3e50",
-  },
-  subtitle: {
-    margin: "10px 0 0",
-    fontSize: "1.1rem",
-    color: "#7f8c8d",
-    fontWeight: "normal",
-  },
-  uploadSection: {
-    backgroundColor: "#fff",
-    padding: "30px",
-    borderRadius: "8px",
-    boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
-    marginBottom: "40px",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: "20px",
-  },
-  fileInput: {
-    padding: "10px",
-    border: "1px solid #ddd",
-    borderRadius: "4px",
-    width: "100%",
-    maxWidth: "400px",
-  },
-  button: {
-    backgroundColor: "#2ecc71",
-    color: "white",
-    border: "none",
-    padding: "12px 24px",
-    borderRadius: "4px",
-    cursor: "pointer",
-    fontSize: "1rem",
-    fontWeight: "bold",
-    transition: "background-color 0.3s ease",
-    textTransform: "uppercase",
-    letterSpacing: "1px",
-  },
-  buttonDisabled: {
-    backgroundColor: "#bdc3c7",
-    cursor: "not-allowed",
-  },
-  pipelineGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-    gap: "30px",
-  },
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: "8px",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.08)",
-    overflow: "hidden",
-    transition: "transform 0.3s ease",
-    display: "flex",
-    flexDirection: "column",
-  },
-  cardHeader: {
-    backgroundColor: "#34495e",
-    color: "#fff",
-    padding: "15px",
-    fontWeight: "bold",
-    fontSize: "1.1rem",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  stepNumber: {
-    backgroundColor: "#2ecc71",
-    color: "#fff",
-    borderRadius: "50%",
-    width: "30px",
-    height: "30px",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    fontSize: "0.9rem",
-  },
-  cardBody: {
-    padding: "20px",
-    flex: 1,
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  image: {
-    maxWidth: "100%",
-    height: "auto",
-    borderRadius: "4px",
-    border: "1px solid #eee",
-  },
-  loading: {
-    textAlign: "center",
-    fontSize: "1.2rem",
-    color: "#3498db",
-    marginTop: "20px",
-  },
-};
+import "./estilo.css";
 
 function App() {
   const [file, setFile] = useState(null);
   const [pipelineData, setPipelineData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [zoomImage, setZoomImage] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+  const [uploadSuccess, setUploadSuccess] = useState(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+
+  // PIPELINE REAL (AJUSTADO COM O BACKEND)
+  const steps = [
+    {
+      key: "gaussian",
+      title: "Filtro Gaussiano",
+      description: "Usado para suavizar a imagem e reduzir ruídos do campo"
+    },
+    {
+      key: "sobel",
+      title: "Sobel (Bordas)",
+      description: "Usado para detectar os contornos dos jogadores"
+    },
+    {
+      key: "realce",
+      title: "Operação entre imagens (AbsDiff)",
+      description: "Ajuda a recuperar e evidenciar detalhes importantes que foram reduzidos pelo filtro Gaussiano"
+    },
+    {
+      key: "edges",
+      title: "Canny",
+      description: "Usado para manter apenas bordas mais fortes e claras"
+    },
+    {
+      key: "morph",
+      title: "Dilatação",
+      description: "Usada para reforçar e conectar regiões dos jogadores"
+    },
+    {
+      key: "final",
+      title: "Resultado Final",
+      description: "Jogadores segmentados e destacados no campo"
+    }
+  ];
+
+  const validateFile = (file) => {
+    const acceptedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+    const maxSize = 10 * 1024 * 1024;
+
+    if (!file) return 'Nenhum arquivo selecionado';
+
+    if (!acceptedTypes.includes(file.type)) {
+      return `Formato não suportado. Use: ${acceptedTypes.map(t => t.split('/')[1]).join(', ')}`;
+    }
+
+    if (file.size > maxSize) {
+      return `Arquivo muito grande. Máximo: ${maxSize / (1024 * 1024)}MB`;
+    }
+
+    return null;
+  };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!file) {
+      setUploadError("Selecione um arquivo primeiro");
+      return;
+    }
+
     setIsLoading(true);
-    setPipelineData(null); // Limpar dados anteriores
+    setUploadError(null);
+    setUploadSuccess(null);
+    setPipelineData(null);
+    setCurrentStep(0);
 
     const formData = new FormData();
     formData.append("image", file);
@@ -135,87 +83,142 @@ function App() {
         body: formData,
       });
 
-      if (!res.ok) {
-        throw new Error("Falha no processamento");
-      }
+      if (!res.ok) throw new Error(`Erro HTTP: ${res.status}`);
 
       const data = await res.json();
       setPipelineData(data);
-    } catch (error) {
-      console.error("Erro:", error);
-      alert("Ocorreu um erro ao processar a imagem. Verifique o backend.");
+      setUploadSuccess("Imagem processada com sucesso!");
+    } catch (err) {
+      setUploadError(err.message || "Erro ao processar imagem");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Definição dos passos para facilitar a renderização
-  const steps = [
-    { key: "original", title: "Imagem Original", description: "Upload do usuário" },
-    { key: "gaussian", title: "1. Filtro Gaussiano", description: "Suavização e Redução de Ruído" },
-    { key: "sobel", title: "2. Filtro Sobel", description: "Detecção de Bordas Spaciais" },
-    { key: "morphology", title: "3. Operação Morfológica", description: "Binarização e Dilatação (Threshold)" },
-    { key: "final", title: "4. Resultado Final (VAR)", description: "AddWeighted + Transformada de Hough" },
-  ];
-
   return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>Sistema de Análise de Impedimento</h1>
-        <h2 style={styles.subtitle}>Processamento Digital de Imagens com OpenCV e Flask</h2>
-      </header>
+    <div className="container">
 
-      <section style={styles.uploadSection}>
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => setFile(e.target.files[0])}
-          style={styles.fileInput}
-        />
-        <button
-          onClick={handleUpload}
-          style={{ ...styles.button, ...(isLoading || !file ? styles.buttonDisabled : {}) }}
-          disabled={isLoading || !file}
-        >
-          {isLoading ? "Processando..." : "Analisar Imagem"}
-        </button>
-      </section>
+      {/* HEADER */}
+      <div className="header">
+        <h1 className="title">⚽ VAR Analyzer</h1>
+        <p className="subtitle">
+          Pipeline de visão computacional para análise de impedimento
+        </p>
+      </div>
 
-      {isLoading && <div style={styles.loading}>Processando informações da imagem... Aguarde.</div>}
+      {/* UPLOAD */}
+      <div className="upload-container">
 
+        <div className="upload-input-wrapper">
+          <input
+            id="file-upload"
+            type="file"
+            className="upload-input"
+            onChange={(e) => setFile(e.target.files[0])}
+          />
+
+          <label htmlFor="file-upload" className="upload-label">
+            Selecionar arquivo
+          </label>
+        </div>
+
+        {file && (
+          <div className="file-info">
+            📄 {file.name}
+            <button
+              className="remove-file"
+              onClick={() => setFile(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <div className="upload-button-wrapper">
+          <button
+            className="upload-button"
+            onClick={handleUpload}
+            disabled={!file || isLoading}
+          >
+            {isLoading ? "Processando..." : "Analisar"}
+          </button>
+        </div>
+
+        {uploadError && (
+          <div className="error-message">{uploadError}</div>
+        )}
+
+        {uploadSuccess && (
+          <div className="success-message">{uploadSuccess}</div>
+        )}
+
+      </div>
+
+      {/* RESULTADO */}
       {pipelineData && (
-        <section style={styles.pipelineGrid}>
-          {steps.map((step, index) => (
-            <div key={step.key} style={styles.card}>
-              <div style={styles.cardHeader}>
-                <span>{step.title}</span>
-                <div style={styles.stepNumber}>{index === 0 ? "★" : index}</div>
-              </div>
-              <div style={styles.cardBody}>
-                <img
-                  src={pipelineData[step.key]}
-                  alt={step.description}
-                  style={styles.image}
-                  onLoad={(e) => { e.target.src = `${pipelineData[step.key]}?t=${new Date().getTime()}`; }}
-                />
-              </div>
-              <div style={{ padding: "0 20px 20px", color: "#7f8c8d", fontSize: "0.9rem", textAlign: "center" }}>
-                {step.description}
-              </div>
+        <div className="grid">
+
+          {/* ORIGINAL */}
+          <div className="card">
+            <div className="card-header">Original</div>
+            <div className="card-body">
+              <img
+                src={pipelineData.original}
+                className="image"
+                onClick={() => setZoomImage(pipelineData.original)}
+              />
             </div>
-          ))}
-        </section>
+          </div>
+
+          {/* PIPELINE */}
+          <div className="card">
+
+            <div className="card-header">
+              <div>
+                <div>{steps[currentStep].title}</div>
+                <small style={{ opacity: 0.8 }}>
+                  {steps[currentStep].description}
+                </small>
+              </div>
+
+              <span>{currentStep + 1}/{steps.length}</span>
+            </div>
+
+            <div className="card-body">
+              <img
+                src={pipelineData[steps[currentStep].key]}
+                className="image"
+                onClick={() => setZoomImage(pipelineData[steps[currentStep].key])}
+              />
+            </div>
+
+            <div className="controls">
+              <button
+                className="btn btn-prev"
+                onClick={() => setCurrentStep(s => Math.max(0, s - 1))}
+              >
+                ←
+              </button>
+
+              <button
+                className="btn btn-next"
+                onClick={() => setCurrentStep(s => Math.min(steps.length - 1, s + 1))}
+              >
+                →
+              </button>
+            </div>
+
+          </div>
+        </div>
       )}
-      {pipelineData && (
-  <div style={{ textAlign: "center", marginTop: "30px" }}>
-    <h2>
-      Resultado:{" "}
-      <span style={{ color: pipelineData.offside === "sim" ? "red" : "green" }}>
-        {pipelineData.offside === "sim" ? "IMPEDIMENTO" : "LEGAL"}
-      </span>
-    </h2>
-  </div>
-)}
+
+      {/* ZOOM */}
+      {zoomImage && (
+        <div className="zoom-overlay" onClick={() => setZoomImage(null)}>
+          <img src={zoomImage} className="zoom-image" />
+        </div>
+      )}
+
     </div>
   );
 }
